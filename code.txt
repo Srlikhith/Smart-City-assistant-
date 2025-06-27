@@ -1,0 +1,178 @@
+# ✅ Install Required Libraries
+!pip install transformers accelerate gradio --quiet
+
+# ✅ Imports
+import gradio as gr
+import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
+# ✅ Load IBM Granite Model
+model_id = "ibm-granite/granite-3.3-2b-instruct"
+
+try:
+    tokenizer = AutoTokenizer.from_pretrained(model_id)
+    model = AutoModelForCausalLM.from_pretrained(
+        model_id,
+        torch_dtype=torch.bfloat16,
+        device_map="auto"
+    )
+    model.eval()
+except Exception as e:
+    print(f"Error loading model: {e}")
+    def placeholder_inference(prompt, mode):
+        return "⚠ Model loading failed. Please switch to GPU/High-RAM runtime."
+    inference_function = placeholder_inference
+    model = tokenizer = None
+
+# ✅ Inference Function
+if model and tokenizer:
+    def granite_inference(prompt, mode):
+        try:
+            if mode == "Eco-Query Assistant":
+                formatted_prompt = (
+                    f"Instruct: As a sustainable smart city assistant, answer this eco-sustainability question:\n"
+                    f"{prompt}\nOutput:"
+                )
+            elif mode == "Smart Complaint Resolver":
+                formatted_prompt = (
+                    f"Instruct: As a smart city complaint resolver, analyze this civic issue. "
+                    f"Classify it, suggest causes, and assign a department.\n"
+                    f"Issue: {prompt}\nOutput:"
+                )
+            else:
+                formatted_prompt = f"Instruct: {prompt}\nOutput:"
+
+            inputs = tokenizer(formatted_prompt, return_tensors="pt").to(model.device)
+
+            with torch.no_grad():
+                outputs = model.generate(
+                    inputs.input_ids,
+                    max_new_tokens=800,
+                    temperature=0.7,
+                    top_p=0.9,
+                    do_sample=True,
+                    early_stopping=True
+                )
+
+            response = tokenizer.decode(outputs[0][inputs.input_ids.shape[1]:], skip_special_tokens=True)
+            return response.strip()
+
+        except Exception as e:
+            return f"❌ Inference error: {e}"
+
+    inference_function = granite_inference
+
+# ✅ Gradio App with Login
+if inference_function:
+    with gr.Blocks(css="""
+        .gradio-container {
+            background: linear-gradient(-45deg, #ff6ec4, #7873f5, #4ADEDE, #56FFA6);
+            background-size: 400% 400%;
+            animation: gradientFlow 15s ease infinite;
+            padding: 20px;
+            border-radius: 16px;
+        }
+
+        @keyframes gradientFlow {
+            0% { background-position: 0% 50%; }
+            50% { background-position: 100% 50%; }
+            100% { background-position: 0% 50%; }
+        }
+
+        .title {
+            font-size: 36px;
+            font-weight: bold;
+            text-align: center;
+            color: #ffffff;
+            text-shadow: 2px 2px 5px #000;
+        }
+
+        .subtitle {
+            font-size: 18px;
+            text-align: center;
+            color: #eeeeee;
+            margin-bottom: 20px;
+        }
+
+        #fancy-button {
+            background: linear-gradient(135deg, #8E2DE2, #4A00E0);
+            color: white !important;
+            font-weight: 700;
+            font-size: 17px;
+            padding: 14px 28px;
+            border-radius: 14px !important;
+            border: none;
+            box-shadow: 0 5px 15px rgba(138, 43, 226, 0.4);
+            transition: all 0.3s ease-in-out;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        #fancy-button:hover {
+            background: linear-gradient(135deg, #4A00E0, #8E2DE2);
+            transform: scale(1.05);
+            box-shadow: 0 8px 20px rgba(72, 0, 255, 0.5);
+        }
+
+        textarea, input[type="text"], input[type="password"] {
+            border-radius: 10px !important;
+            background-color: #1e1e2f;
+            color: white;
+            border: 1px solid #444;
+        }
+    """) as demo:
+
+        login_state = gr.State(False)
+
+        def login(username, password):
+            if username == "admin" and password == "1234":
+                return gr.update(visible=False), gr.update(visible=True), True, ""
+            else:
+                return None, None, False, "❌ Invalid credentials. Try again."
+
+        # Login Page
+        with gr.Column(visible=True) as login_page:
+            gr.Markdown("<div class='title'>🔐 Login to Smart City Assistant</div>")
+            username = gr.Textbox(label="Username", placeholder="Enter username")
+            password = gr.Textbox(label="Password", type="password", placeholder="Enter password")
+            login_btn = gr.Button("🔓 Login", elem_id="fancy-button")
+            login_error = gr.Markdown("", visible=True)
+
+        # Main App Page
+        with gr.Column(visible=False) as main_app:
+            gr.Markdown("<div class='title'>🌆 Sustainable Smart City Assistant</div>")
+            gr.Markdown("<div class='subtitle'>Powered by IBM Granite LLM — Ask eco-questions or report civic issues</div>")
+
+            with gr.Row():
+                mode_choice = gr.Radio(
+                    ["Eco-Query Assistant", "Smart Complaint Resolver"],
+                    label="🧠 Choose Functionality",
+                    value="Eco-Query Assistant"
+                )
+
+            input_text = gr.Textbox(
+                lines=5,
+                placeholder="Type your eco-question or civic complaint here...",
+                label="📝 Your Query"
+            )
+
+            output_text = gr.Textbox(label="🤖 Assistant Response", interactive=False)
+
+            submit_button = gr.Button("🚀 Generate Response", elem_id="fancy-button")
+
+            submit_button.click(
+                fn=inference_function,
+                inputs=[input_text, mode_choice],
+                outputs=output_text
+            )
+
+        login_btn.click(
+            login,
+            inputs=[username, password],
+            outputs=[login_page, main_app, login_state, login_error]
+        )
+
+    demo.launch(share=True)
+
+else:
+    print("❗ Model failed to load. Use GPU/High-RAM in Colab.")
